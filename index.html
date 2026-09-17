@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reflection Rewards Tracker</title>
+<meta name="description" content="Tally reflection-token dividends received by your Solana wallets over any period, per reward token, and compare against estimates.">
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --border: #2a2f3a;
+    --text: #e6e8ee; --muted: #9aa3b2; --accent: #7cc4ff; --good: #5fd48a; --bad: #ff7b7b; --warn: #ffcf6b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { padding: 18px 20px 8px; border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; color: var(--muted); }
+  main { padding: 16px 20px 60px; max-width: 1300px; margin: 0 auto; }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  section h2 { margin: 0 0 10px; font-size: 15px; color: var(--accent); }
+  label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 3px; }
+  input[type=text], input[type=password], input[type=number], input[type=datetime-local], select, textarea {
+    width: 100%; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; font-size: 13px;
+  }
+  input[type=text].mono, textarea.mono { font-family: var(--mono); }
+  textarea { min-height: 90px; resize: vertical; }
+  .row { display: grid; gap: 12px; }
+  .row.c2 { grid-template-columns: 1fr 1fr; }
+  .row.c3 { grid-template-columns: 1fr 1fr 1fr; }
+  .row.c4 { grid-template-columns: 2fr 1fr 1fr 1fr; }
+  @media (max-width: 800px) { .row.c2, .row.c3, .row.c4 { grid-template-columns: 1fr; } }
+  button { background: var(--accent); color: #0b1a2b; border: 0; border-radius: 6px; padding: 8px 14px; font-weight: 600; cursor: pointer; }
+  button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+  button:disabled { opacity: .5; cursor: default; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .progress { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; margin-top: 10px; }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  #log { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: pre-wrap; max-height: 160px; overflow: auto; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .mono { font-family: var(--mono); }
+  .card { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+  .card h3 { margin: 0 0 6px; font-size: 15px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .card h3 small { color: var(--muted); font-weight: normal; font-family: var(--mono); font-size: 11px; }
+  .kpis { display: flex; gap: 18px; flex-wrap: wrap; margin: 6px 0 10px; }
+  .kpi { min-width: 120px; }
+  .kpi .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .kpi .l { color: var(--muted); font-size: 11px; }
+  .good { color: var(--good); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin: 6px 0; }
+  a { color: var(--accent); text-decoration: none; }
+  .pill { display: inline-block; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; font-size: 11px; color: var(--muted); }
+  .inline { display: inline-flex; gap: 8px; align-items: center; }
+  .inline input[type=number] { width: 130px; }
+  .inline select { width: auto; }
+  .banner { background: #2a2416; border: 1px solid #5a4a1e; color: var(--warn); border-radius: 8px; padding: 8px 12px; font-size: 12px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Reflection Rewards Tracker</h1>
+  <p>Tallies dividend tokens actually received by your Solana wallets (StonkFun reward-mode coins, etc.) over any period, so you can check them against <a href="https://thestonkboard.com/" target="_blank" rel="noopener">thestonkboard.com</a> estimates. Everything runs in this browser tab; nothing is uploaded anywhere except the API queries you configure.</p>
+</header>
+<main>
+
+<section>
+  <h2>1. Data source</h2>
+  <div class="row c2">
+    <div>
+      <label for="provider">Provider</label>
+      <select id="provider">
+        <option value="solscan">Solscan Pro API (needs API key, fastest)</option>
+        <option value="rpc">Solana JSON-RPC (any RPC URL, no Solscan key)</option>
+      </select>
+      <div class="hint" id="providerHint"></div>
+    </div>
+    <div id="solscanFields">
+      <label for="solscanKey">Solscan Pro API key</label>
+      <input type="password" id="solscanKey" placeholder="paste key from solscan.io/apis" autocomplete="off">
+      <div class="hint">Sent only to pro-api.solscan.io as the <span class="mono">token</span> header. Stored in this browser's localStorage.</div>
+    </div>
+    <div id="rpcFields" style="display:none">
+      <label for="rpcUrl">RPC URL</label>
+      <input type="text" id="rpcUrl" class="mono" placeholder="https://mainnet.helius-rpc.com/?api-key=... or https://api.mainnet-beta.solana.com">
+      <div class="hint">The public mainnet-beta endpoint is heavily rate-limited; a free Helius/QuickNode/Triton key works much better. Optional: paste a Helius, Jupiter, or other RPC.</div>
+    </div>
+  </div>
+  <div class="row c3" style="margin-top:10px">
+    <div>
+      <label for="strict">Reward detection</label>
+      <select id="strict">
+        <option value="strict">Strict: inbound only, wallet sent nothing and did not sign (recommended)</option>
+        <option value="nosign">Inbound only, wallet did not sign</option>
+        <option value="loose">Any inbound transfer (includes buys and swaps)</option>
+      </select>
+      <div class="hint">Reflection payouts are pushed to you by a distributor. Anything where your wallet paid out a token, or signed the transaction, is a buy/swap/transfer, not a dividend.</div>
+    </div>
+    <div>
+      <label for="minAmt">Ignore dust below (reward-token units)</label>
+      <input type="number" id="minAmt" value="0" step="any" min="0">
+    </div>
+    <div>
+      <label for="concurrency">Parallel requests</label>
+      <input type="number" id="concurrency" value="4" min="1" max="20">
+      <div class="hint">Lower this if you see HTTP 429 errors.</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>2. Wallets</h2>
+  <label for="addresses">One Solana address per line. Optional label after a space or comma, e.g. <span class="mono">7Tug5Qgq... main</span></label>
+  <textarea id="addresses" class="mono" placeholder="7Tug5Qgqcnnf16FNqwDqFVx2YV6UVMVnhmJZXdGJmUVb main"></textarea>
+</section>
+
+<section>
+  <h2>3. Period</h2>
+  <div class="row c4">
+    <div>
+      <label for="period">Window</label>
+      <select id="period">
+        <option value="1">Last 24 hours</option>
+        <option value="2">Last 2 days</option>
+        <option value="3">Last 3 days</option>
+        <option value="7" selected>Last 7 days</option>
+        <option value="14">Last 14 days</option>
+        <option value="30">Last 30 days</option>
+        <option value="custom">Custom range</option>
+      </select>
+    </div>
+    <div><label for="fromDt">From (local time)</label><input type="datetime-local" id="fromDt" disabled></div>
+    <div><label for="toDt">To (local time)</label><input type="datetime-local" id="toDt" disabled></div>
+    <div><label>&nbsp;</label><button id="run">Fetch rewards</button></div>
+  </div>
+  <div class="actions">
+    <button class="secondary" id="cancel" disabled>Cancel</button>
+    <button class="secondary" id="exportCsv" disabled>Export CSV</button>
+    <button class="secondary" id="clearCache">Clear cached transactions</button>
+    <span class="hint" id="status"></span>
+  </div>
+  <div class="progress"><div id="bar"></div></div>
+  <div id="log"></div>
+</section>
+
+<section id="results" style="display:none">
+  <h2>4. Rewards received</h2>
+  <div id="summary"></div>
+  <div id="cards"></div>
+</section>
+
+<section>
+  <h2>Notes</h2>
+  <ul class="hint" style="margin:0; padding-left:18px">
+    <li>"Per day" divides the window total by the window length in days. Compare it with the daily estimate on thestonkboard.com (their estimate is holding USD × APR ÷ 365, modeled from recent payouts, so it drifts with trading volume).</li>
+    <li>Type the site's estimate into the "Estimate/day" box on each reward-token card to see the difference. Estimates are saved per token in this browser.</li>
+    <li>Sender breakdown shows which distributor wallets paid you. If a reward token is paid by several StonkFun coins you hold, use it to split them, and add a label for the sender.</li>
+    <li>Token symbols and USD prices come from Solscan (when using that provider) or Jupiter's public token API. Unknown tokens show a shortened mint address; click it to open Solscan.</li>
+    <li>Not financial advice. Verify anything important on Solscan directly.</li>
+  </ul>
+</section>
+</main>
+
+<script>
+'use strict';
+// ---------- constants ----------
+const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+const SOLSCAN_BASE = 'https://pro-api.solscan.io/v2.0';
+const KNOWN_TOKENS = {
+  // mint: {symbol, name}. Extend freely; anything else is looked up live.
+  'DC6HP2A7SUy49WeazfeWgbwxVpzKdEPuB46mtb7XBzWx': { symbol: 'STONK', name: 'StonkFun' },
+  'So11111111111111111111111111111111111111112': { symbol: 'wSOL', name: 'Wrapped SOL' },
+  'So11111111111111111111111111111111111111111': { symbol: 'SOL', name: 'Solana' },
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': { symbol: 'USDC', name: 'USD Coin' },
+};
+const LS_KEY = 'rrt.settings.v1';
+const CACHE_KEY = 'rrt.txcache.v1';
+
+// ---------- settings persistence ----------
+const $ = id => document.getElementById(id);
+const settingIds = ['provider','solscanKey','rpcUrl','strict','minAmt','concurrency','addresses','period','fromDt','toDt'];
+function loadSettings() {
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch (e) { s = {}; }
+  for (const id of settingIds) if (s[id] !== undefined) $(id).value = s[id];
+  if (!s.addresses) $('addresses').value = '7Tug5Qgqcnnf16FNqwDqFVx2YV6UVMVnhmJZXdGJmUVb main';
+  state.estimates = s.estimates || {};
+  state.labels = s.labels || {};
+  onProviderChange(); onPeriodChange();
+}
+function saveSettings() {
+  const s = {};
+  for (const id of settingIds) s[id] = $(id).value;
+  s.estimates = state.estimates; s.labels = state.labels;
+  try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch (e) {}
+}
+const state = { estimates: {}, labels: {}, results: null, cancel: false, meta: {} };
+
+function onProviderChange() {
+  const p = $('provider').value;
+  $('solscanFields').style.display = p === 'solscan' ? '' : 'none';
+  $('rpcFields').style.display = p === 'rpc' ? '' : 'none';
+  $('providerHint').textContent = p === 'solscan'
+    ? 'Uses /account/transfer with a time filter. One page of 100 transfers per request.'
+    : 'Enumerates your token accounts, lists their signatures in the window, then fetches each transaction and diffs token balances. Slower, but works with any RPC.';
+}
+function onPeriodChange() {
+  const custom = $('period').value === 'custom';
+  $('fromDt').disabled = !custom; $('toDt').disabled = !custom;
+  if (custom && !$('toDt').value) {
+    const now = new Date(); $('toDt').value = toLocalInput(now);
+    $('fromDt').value = toLocalInput(new Date(now.getTime() - 7 * 86400e3));
+  }
+}
+function toLocalInput(d) {
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function windowSeconds() {
+  const v = $('period').value;
+  const now = Math.floor(Date.now() / 1000);
+  if (v !== 'custom') return { from: now - Number(v) * 86400, to: now };
+  const f = Math.floor(new Date($('fromDt').value).getTime() / 1000);
+  const t = Math.floor(new Date($('toDt').value).getTime() / 1000);
+  if (!(f < t)) throw new Error('Custom range: "From" must be before "To".');
+  return { from: f, to: t };
+}
+function parseAddresses() {
+  const out = [];
+  for (const raw of $('addresses').value.split('\n')) {
+    const line = raw.trim(); if (!line) continue;
+    const m = line.match(/^([1-9A-HJ-NP-Za-km-z]{32,44})[\s,]*(.*)$/);
+    if (!m) throw new Error(`Not a Solana address: "${line.slice(0, 40)}"`);
+    out.push({ address: m[1], label: m[2].trim() || m[1].slice(0, 4) + '…' + m[1].slice(-4) });
+  }
+  if (!out.length) throw new Error('Add at least one wallet address.');
+  return out;
+}
+
+// ---------- logging / progress ----------
+function log(msg) {
+  const el = $('log'); el.textContent += msg + '\n'; el.scrollTop = el.scrollHeight;
+}
+function setProgress(done, total, text) {
+  $('bar').style.width = total ? Math.min(100, 100 * done / total) + '%' : '0%';
+  if (text !== undefined) $('status').textContent = text;
+}
+function checkCancel() { if (state.cancel) throw new Error('Cancelled.'); }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ---------- HTTP with retry ----------
+async function fetchJson(url, opts = {}, tries = 5) {
+  let delay = 800;
+  for (let i = 0; i < tries; i++) {
+    checkCancel();
+    let res;
+    try { res = await fetch(url, opts); }
+    catch (e) {
+      if (i === tries - 1) throw new Error(`Network/CORS error calling ${new URL(url).host}: ${e.message}. If this is a CORS block, switch provider.`);
+      await sleep(delay); delay *= 2; continue;
+    }
+    if (res.status === 429 || res.status >= 500) {
+      if (i === tries - 1) throw new Error(`HTTP ${res.status} from ${new URL(url).host}`);
+      const ra = Number(res.headers.get('retry-after')); await sleep(ra ? ra * 1000 : delay); delay *= 2; continue;
+    }
+    if (!res.ok) {
+      let body = ''; try { body = (await res.text()).slice(0, 200); } catch (e) {}
+      throw new Error(`HTTP ${res.status} from ${new URL(url).host}: ${body}`);
+    }
+    return res.json();
+  }
+}
+async function mapLimit(items, limit, fn, onEach) {
+  const results = new Array(items.length); let next = 0, done = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++; checkCancel();
+      results[i] = await fn(items[i], i); done++; if (onEach) onEach(done, items.length);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+// ---------- transaction cache (signature -> normalized tx) ----------
+let txCache = {};
+try { txCache = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}'); } catch (e) { txCache = {}; }
+function saveCache() {
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify(txCache)); }
+  catch (e) { txCache = {}; try { localStorage.removeItem(CACHE_KEY); } catch (e2) {} }
+}
+
+/*
+ Normalized event shape used by both providers:
+ { sig, time (unix s), wallet, mint, decimals, amount (ui units, +in), sender (owner addr or ''),
+   walletSigned (bool|null), walletSentAnything (bool) }
+ One event per (tx, wallet, mint) with net inbound amount > 0.
+*/
+
+// ---------- Provider: Solscan Pro ----------
+async function solscanFetchWallet(w, from, to, key, onPage) {
+  const headers = { token: key, accept: 'application/json' };
+  const rows = [];
+  for (let page = 1; page < 500; page++) {
+    const q = new URLSearchParams({ address: w.address, from_time: String(from), to_time: String(to), page: String(page), page_size: '100', sort_by: 'block_time', sort_order: 'desc' });
+    const j = await fetchJson(`${SOLSCAN_BASE}/account/transfer?${q}`, { headers });
+    if (j && j.success === false) throw new Error(`Solscan: ${j.errors && (j.errors.message || JSON.stringify(j.errors)) || 'request failed'}`);
+    const data = (j && j.data) || [];
+    rows.push(...data); onPage(page, rows.length);
+    if (data.length < 100) break;
+  }
+  // group by transaction
+  const byTx = new Map();
+  for (const r of rows) {
+    const t = Number(r.block_time || (r.time ? Date.parse(r.time) / 1000 : 0));
+    if (!(t >= from && t <= to)) continue;
+    const sig = r.trans_id; if (!sig) continue;
+    let g = byTx.get(sig); if (!g) { g = { sig, time: t, inbound: new Map(), sentAnything: false }; byTx.set(sig, g); }
+    const flow = r.flow || (r.to_address === w.address ? 'in' : r.from_address === w.address ? 'out' : '');
+    if (flow === 'out' || (r.from_address === w.address && r.to_address !== w.address)) { g.sentAnything = true; continue; }
+    if (flow !== 'in') continue;
+    const mint = r.token_address; if (!mint) continue;
+    const dec = Number(r.token_decimals ?? 0);
+    const amt = Number(r.amount) / Math.pow(10, dec);
+    if (!(amt > 0)) continue;
+    let e = g.inbound.get(mint); if (!e) { e = { mint, decimals: dec, amount: 0, senders: new Set() }; g.inbound.set(mint, e); }
+    e.amount += amt; if (r.from_address) e.senders.add(r.from_address);
+  }
+  const events = [];
+  for (const g of byTx.values()) for (const e of g.inbound.values()) {
+    events.push({ sig: g.sig, time: g.time, wallet: w.address, mint: e.mint, decimals: e.decimals, amount: e.amount, sender: [...e.senders].join('|'), walletSigned: null, walletSentAnything: g.sentAnything });
+  }
+  return events;
+}
+async function solscanTokenMeta(mints, key) {
+  const out = {};
+  const chunks = []; for (let i = 0; i < mints.length; i += 20) chunks.push(mints.slice(i, i + 20));
+  for (const c of chunks) {
+    try {
+      const q = c.map(m => 'address[]=' + encodeURIComponent(m)).join('&');
+      const j = await fetchJson(`${SOLSCAN_BASE}/token/meta/multi?${q}`, { headers: { token: key } }, 2);
+      for (const t of (j && j.data) || []) out[t.address] = { symbol: t.symbol, name: t.name, price: t.price, decimals: t.decimals };
+    } catch (e) { log('Token metadata (Solscan) failed: ' + e.message); }
+  }
+  return out;
+}
+
+// ---------- Provider: JSON-RPC ----------
+let rpcId = 1;
+async function rpc(url, method, params) {
+  const j = await fetchJson(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params }) });
+  if (j.error) throw new Error(`RPC ${method}: ${j.error.message || JSON.stringify(j.error)}`);
+  return j.result;
+}
+async function rpcBatch(url, calls) {
+  const body = calls.map(([method, params]) => ({ jsonrpc: '2.0', id: rpcId++, method, params }));
+  let j;
+  try { j = await fetchJson(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); }
+  catch (e) { j = null; }
+  if (!Array.isArray(j) || j.length !== calls.length) {
+    // batch unsupported: fall back to sequential
+    const out = [];
+    for (const [m, p] of calls) out.push(await rpc(url, m, p));
+    return out;
+  }
+  const byId = new Map(j.map(r => [r.id, r]));
+  return body.map(b => { const r = byId.get(b.id); if (!r) return null; if (r.error) throw new Error(`RPC batch: ${r.error.message}`); return r.result; });
+}
+async function rpcFetchWallet(w, from, to, url, conc, onStep) {
+  // 1. token accounts (both programs)
+  const accts = [];
+  for (const pid of [TOKEN_PROGRAM, TOKEN_2022_PROGRAM]) {
+    const r = await rpc(url, 'getTokenAccountsByOwner', [w.address, { programId: pid }, { encoding: 'jsonParsed', commitment: 'confirmed' }]);
+    for (const v of (r && r.value) || []) {
+      const info = v.account.data.parsed.info;
+      accts.push({ pubkey: v.pubkey, mint: info.mint, decimals: info.tokenAmount.decimals });
+    }
+  }
+  onStep(`${w.label}: ${accts.length} token accounts`);
+  // 2. signatures per token account within window
+  const sigs = new Map();
+  await mapLimit(accts, conc, async a => {
+    let before;
+    for (let guard = 0; guard < 200; guard++) {
+      const r = await rpc(url, 'getSignaturesForAddress', [a.pubkey, { limit: 1000, before, commitment: 'confirmed' }]);
+      if (!r || !r.length) break;
+      let oldest = Infinity;
+      for (const s of r) {
+        const bt = s.blockTime; if (bt == null) continue; oldest = Math.min(oldest, bt);
+        if (s.err) continue;
+        if (bt >= from && bt <= to) sigs.set(s.signature, bt);
+      }
+      if (oldest < from || r.length < 1000) break;
+      before = r[r.length - 1].signature;
+    }
+  }, (d, t) => onStep(`${w.label}: scanned ${d}/${t} token accounts, ${sigs.size} txs in window`));
+  // 3. fetch transactions (cached)
+  const toFetch = [...sigs.keys()].filter(s => !txCache[s]);
+  onStep(`${w.label}: fetching ${toFetch.length} transactions (${sigs.size - toFetch.length} cached)`);
+  const chunks = []; for (let i = 0; i < toFetch.length; i += 10) chunks.push(toFetch.slice(i, i + 10));
+  let done = 0;
+  await mapLimit(chunks, conc, async c => {
+    const res = await rpcBatch(url, c.map(s => ['getTransaction', [s, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'confirmed' }]]));
+    res.forEach((tx, i) => { txCache[c[i]] = normalizeTx(c[i], tx); });
+    done += c.length; onStep(`${w.label}: fetched ${done}/${toFetch.length} transactions`);
+  });
+  saveCache();
+  // 4. events for this wallet
+  const events = [];
+  for (const [sig, bt] of sigs) {
+    const n = txCache[sig]; if (!n || n.err) continue;
+    const deltas = new Map(); // owner|mint -> {amount, decimals}
+    for (const d of n.deltas) {
+      const k = d.owner + '|' + d.mint; const cur = deltas.get(k) || { amount: 0, decimals: d.decimals };
+      cur.amount += d.amount; deltas.set(k, cur);
+    }
+    const mine = [...deltas].filter(([k]) => k.startsWith(w.address + '|'));
+    const sentAnything = mine.some(([, v]) => v.amount < -1e-12) || n.solOut.includes(w.address);
+    for (const [k, v] of mine) {
+      if (!(v.amount > 1e-12)) continue;
+      const mint = k.split('|')[1];
+      const senders = [...deltas].filter(([k2, v2]) => k2.endsWith('|' + mint) && !k2.startsWith(w.address + '|') && v2.amount < 0).map(([k2]) => k2.split('|')[0]);
+      events.push({ sig, time: bt, wallet: w.address, mint, decimals: v.decimals, amount: v.amount, sender: senders.join('|'), walletSigned: n.signers.includes(w.address), walletSentAnything: sentAnything });
+    }
+  }
+  return events;
+}
+function normalizeTx(sig, tx) {
+  if (!tx) return { err: true };
+  const meta = tx.meta || {};
+  if (meta.err) return { err: true };
+  const keys = (tx.transaction && tx.transaction.message && tx.transaction.message.accountKeys) || [];
+  const signers = keys.filter(k => k.signer).map(k => k.pubkey);
+  const pre = new Map(), post = new Map();
+  for (const b of meta.preTokenBalances || []) pre.set(b.accountIndex, b);
+  for (const b of meta.postTokenBalances || []) post.set(b.accountIndex, b);
+  const deltas = [];
+  for (const idx of new Set([...pre.keys(), ...post.keys()])) {
+    const a = pre.get(idx), b = post.get(idx); const ref = b || a;
+    const owner = ref.owner || ''; const mint = ref.mint; const decimals = ref.uiTokenAmount.decimals;
+    const pa = a ? Number(a.uiTokenAmount.amount) : 0, pb = b ? Number(b.uiTokenAmount.amount) : 0;
+    const d = (pb - pa) / Math.pow(10, decimals);
+    if (d !== 0) deltas.push({ owner, mint, decimals, amount: d });
+  }
+  // native SOL out (beyond fee) marks the wallet as a sender too
+  const solOut = [];
+  const preB = meta.preBalances || [], postB = meta.postBalances || [];
+  keys.forEach((k, i) => { const d = (postB[i] ?? 0) - (preB[i] ?? 0); const fee = i === 0 ? (meta.fee || 0) : 0; if (d + fee < -1e4) solOut.push(k.pubkey); });
+  return { deltas, signers, solOut, time: tx.blockTime };
+}
+
+// ---------- token metadata via Jupiter (public, CORS-enabled) ----------
+async function jupiterMeta(mints) {
+  const out = {};
+  await mapLimit(mints, 3, async m => {
+    try {
+      const j = await fetchJson(`https://lite-api.jup.ag/tokens/v2/search?query=${encodeURIComponent(m)}`, {}, 2);
+      const t = Array.isArray(j) ? j.find(x => x.id === m) : null;
+      if (t) out[m] = { symbol: t.symbol, name: t.name, price: t.usdPrice, decimals: t.decimals };
+    } catch (e) { /* best effort */ }
+  });
+  return out;
+}
+
+// ---------- main run ----------
+async function run() {
+  state.cancel = false; $('run').disabled = true; $('cancel').disabled = false; $('exportCsv').disabled = true;
+  $('log').textContent = ''; setProgress(0, 1, 'Starting…');
+  try {
+    saveSettings();
+    const wallets = parseAddresses();
+    const { from, to } = windowSeconds();
+    const provider = $('provider').value;
+    const conc = Math.max(1, Number($('concurrency').value) || 4);
+    log(`Window: ${new Date(from * 1000).toLocaleString()} → ${new Date(to * 1000).toLocaleString()} (${((to - from) / 86400).toFixed(2)} days)`);
+    let events = [];
+    for (let i = 0; i < wallets.length; i++) {
+      const w = wallets[i];
+      setProgress(i, wallets.length, `Wallet ${i + 1}/${wallets.length}: ${w.label}`);
+      let ev;
+      if (provider === 'solscan') {
+        const key = $('solscanKey').value.trim(); if (!key) throw new Error('Solscan Pro API key is required for this provider.');
+        ev = await solscanFetchWallet(w, from, to, key, (page, n) => $('status').textContent = `${w.label}: page ${page}, ${n} transfers`);
+      } else {
+        const url = $('rpcUrl').value.trim() || 'https://api.mainnet-beta.solana.com';
+        ev = await rpcFetchWallet(w, from, to, url, conc, msg => { $('status').textContent = msg; });
+      }
+      log(`${w.label}: ${ev.length} inbound token events`);
+      events.push(...ev);
+    }
+    // classification
+    const mode = $('strict').value; const minAmt = Number($('minAmt').value) || 0;
+    const rewards = events.filter(e => {
+      if (e.amount < minAmt) return false;
+      if (mode === 'loose') return true;
+      if (e.walletSigned === true) return false;
+      if (mode === 'strict' && e.walletSentAnything) return false;
+      return true;
+    });
+    log(`${rewards.length} of ${events.length} inbound events classified as rewards (${mode}).`);
+    // metadata
+    const mints = [...new Set(rewards.map(e => e.mint))];
+    let meta = {};
+    if (mints.length) {
+      setProgress(1, 1, 'Looking up token symbols/prices…');
+      const unknown = mints.filter(m => !KNOWN_TOKENS[m]);
+      if (provider === 'solscan') meta = await solscanTokenMeta(mints, $('solscanKey').value.trim());
+      const missing = mints.filter(m => !meta[m] || !meta[m].symbol);
+      if (missing.length) Object.assign(meta, await jupiterMeta(missing));
+      for (const m of mints) meta[m] = Object.assign({}, KNOWN_TOKENS[m] || {}, meta[m] || {});
+      void unknown;
+    }
+    state.meta = meta;
+    state.results = { wallets, from, to, rewards, events, mode };
+    render();
+    setProgress(1, 1, `Done. ${rewards.length} reward payouts across ${mints.length} token(s).`);
+    $('exportCsv').disabled = rewards.length === 0;
+  } catch (e) {
+    log('ERROR: ' + e.message); setProgress(0, 1, 'Failed: ' + e.message);
+  } finally {
+    $('run').disabled = false; $('cancel').disabled = true;
+  }
+}
+
+// ---------- rendering ----------
+const fmt = (n, d) => n.toLocaleString(undefined, { maximumFractionDigits: d ?? (n >= 100 ? 2 : n >= 1 ? 4 : 6) });
+const usd = n => '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const short = a => a ? a.slice(0, 4) + '…' + a.slice(-4) : '';
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function symbolOf(mint) { const m = state.meta[mint] || {}; return m.symbol || short(mint); }
+function labelOf(addr) { return state.labels[addr] || ''; }
+
+function render() {
+  const r = state.results; if (!r) return;
+  $('results').style.display = '';
+  const days = (r.to - r.from) / 86400;
+  const byMint = new Map();
+  for (const e of r.rewards) {
+    let g = byMint.get(e.mint); if (!g) { g = { mint: e.mint, total: 0, count: 0, byWallet: new Map(), bySender: new Map(), byDay: new Map(), events: [] }; byMint.set(e.mint, g); }
+    g.total += e.amount; g.count++; g.events.push(e);
+    g.byWallet.set(e.wallet, (g.byWallet.get(e.wallet) || 0) + e.amount);
+    const s = e.sender || '(unknown)'; const bs = g.bySender.get(s) || { amount: 0, count: 0 }; bs.amount += e.amount; bs.count++; g.bySender.set(s, bs);
+    const day = new Date(e.time * 1000).toLocaleDateString(); const bd = g.byDay.get(day) || { amount: 0, count: 0 }; bd.amount += e.amount; bd.count++; g.byDay.set(day, bd);
+  }
+  const groups = [...byMint.values()].sort((a, b) => b.count - a.count);
+  // summary
+  let totalUsd = 0, anyPrice = false;
+  const sumRows = groups.map(g => {
+    const p = (state.meta[g.mint] || {}).price; const v = p ? g.total * p : null; if (v != null) { totalUsd += v; anyPrice = true; }
+    const nm = (state.meta[g.mint] || {}).name;
+    return `<tr><td><b>${esc(symbolOf(g.mint))}</b>${nm ? ` <span class="pill">${esc(nm)}</span>` : ''}</td>
+      <td class="num">${fmt(g.total)}</td><td class="num">${fmt(g.total / days)}</td><td class="num">${g.count}</td>
+      <td class="num">${v != null ? usd(v) : '—'}</td><td class="num">${v != null ? usd(v / days) : '—'}</td></tr>`;
+  }).join('');
+  $('summary').innerHTML = groups.length ? `
+    <div class="hint" style="margin-bottom:6px">${r.wallets.length} wallet(s), ${days.toFixed(2)} days, detection mode: ${esc(r.mode)}. ${r.events.length - r.rewards.length} inbound events excluded as buys/swaps/self-transfers.</div>
+    <table><thead><tr><th>Reward token</th><th class="num">Received</th><th class="num">Per day</th><th class="num">Payouts</th><th class="num">USD (now)</th><th class="num">USD / day</th></tr></thead>
+    <tbody>${sumRows}</tbody>${anyPrice ? `<tfoot><tr><th colspan="4">Total at current prices</th><th class="num">${usd(totalUsd)}</th><th class="num">${usd(totalUsd / days)}</th></tr></tfoot>` : ''}</table>`
+    : '<div class="banner">No reward payouts found in this window. Try a longer window, or set detection to "Any inbound transfer" to see everything that arrived.</div>';
+  // cards
+  $('cards').innerHTML = groups.map(g => renderCard(g, days, r)).join('');
+  // wire estimate inputs and label inputs
+  document.querySelectorAll('[data-est]').forEach(inp => inp.addEventListener('change', () => {
+    const mint = inp.dataset.est; const unitSel = document.querySelector(`[data-estunit="${mint}"]`);
+    state.estimates[mint] = { value: Number(inp.value) || 0, unit: unitSel.value }; saveSettings(); render();
+  }));
+  document.querySelectorAll('[data-estunit]').forEach(sel => sel.addEventListener('change', () => {
+    const mint = sel.dataset.estunit; const inp = document.querySelector(`[data-est="${mint}"]`);
+    state.estimates[mint] = { value: Number(inp.value) || 0, unit: sel.value }; saveSettings(); render();
+  }));
+  document.querySelectorAll('[data-label]').forEach(inp => inp.addEventListener('change', () => {
+    state.labels[inp.dataset.label] = inp.value.trim(); saveSettings(); render();
+  }));
+}
+function renderCard(g, days, r) {
+  const m = state.meta[g.mint] || {}; const sym = symbolOf(g.mint); const price = m.price;
+  const perDay = g.total / days;
+  const est = state.estimates[g.mint] || { value: 0, unit: 'token' };
+  let estLine = '';
+  if (est.value > 0) {
+    let estTok = est.unit === 'usd' ? (price ? est.value / price : null) : est.value;
+    if (estTok == null) estLine = `<span class="warn">No USD price for ${esc(sym)}; enter the estimate in token units.</span>`;
+    else {
+      const diff = perDay - estTok; const pct = 100 * diff / estTok;
+      const cls = Math.abs(pct) < 10 ? 'good' : pct < 0 ? 'bad' : 'warn';
+      estLine = `Actual ${fmt(perDay)} vs estimate ${fmt(estTok)} ${esc(sym)}/day: <b class="${cls}">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</b> (${diff >= 0 ? '+' : ''}${fmt(diff)}/day${price ? ', ' + usd(diff * price) + '/day' : ''})`;
+    }
+  }
+  const walletRows = [...g.byWallet].sort((a, b) => b[1] - a[1]).map(([w, a]) => {
+    const lab = (r.wallets.find(x => x.address === w) || {}).label || short(w);
+    return `<tr><td>${esc(lab)} <span class="mono hint">${short(w)}</span></td><td class="num">${fmt(a)}</td><td class="num">${fmt(a / days)}</td><td class="num">${(100 * a / g.total).toFixed(1)}%</td></tr>`;
+  }).join('');
+  const senderRows = [...g.bySender].sort((a, b) => b[1].amount - a[1].amount).map(([s, v]) => {
+    const first = s.split('|')[0];
+    return `<tr><td><a class="mono" href="https://solscan.io/account/${esc(first)}" target="_blank" rel="noopener">${esc(short(first))}</a>${s.includes('|') ? ' <span class="pill">+' + (s.split('|').length - 1) + '</span>' : ''}
+      <input type="text" data-label="${esc(first)}" value="${esc(labelOf(first))}" placeholder="label (e.g. KNOTS distributor)" style="width:220px;display:inline-block;margin-left:8px"></td>
+      <td class="num">${fmt(v.amount)}</td><td class="num">${v.count}</td><td class="num">${(100 * v.amount / g.total).toFixed(1)}%</td></tr>`;
+  }).join('');
+  const dayRows = [...g.byDay].map(([d, v]) => `<tr><td>${esc(d)}</td><td class="num">${fmt(v.amount)}</td><td class="num">${v.count}</td>${price ? `<td class="num">${usd(v.amount * price)}</td>` : ''}</tr>`).join('');
+  const evRows = g.events.sort((a, b) => b.time - a.time).map(e => {
+    const lab = (r.wallets.find(x => x.address === e.wallet) || {}).label || short(e.wallet);
+    const snd = e.sender.split('|')[0];
+    return `<tr><td>${new Date(e.time * 1000).toLocaleString()}</td><td>${esc(lab)}</td><td class="num">${fmt(e.amount)}</td>
+      <td class="mono">${esc(labelOf(snd) || short(snd))}</td><td><a class="mono" href="https://solscan.io/tx/${esc(e.sig)}" target="_blank" rel="noopener">${esc(short(e.sig))}</a></td></tr>`;
+  }).join('');
+  return `<div class="card">
+    <h3>${esc(sym)} <small><a href="https://solscan.io/token/${esc(g.mint)}" target="_blank" rel="noopener">${esc(g.mint)}</a></small>${m.name ? `<span class="pill">${esc(m.name)}</span>` : ''}</h3>
+    <div class="kpis">
+      <div class="kpi"><div class="v">${fmt(g.total)}</div><div class="l">received in window</div></div>
+      <div class="kpi"><div class="v">${fmt(perDay)}</div><div class="l">per day</div></div>
+      <div class="kpi"><div class="v">${g.count}</div><div class="l">payouts (${(g.count / days).toFixed(1)}/day)</div></div>
+      ${price ? `<div class="kpi"><div class="v">${usd(g.total * price)}</div><div class="l">USD now (${usd(perDay * price)}/day)</div></div>` : ''}
+    </div>
+    <div class="inline" style="margin-bottom:6px">
+      <label style="margin:0">Estimate/day (thestonkboard):</label>
+      <input type="number" step="any" min="0" data-est="${esc(g.mint)}" value="${est.value || ''}" placeholder="0">
+      <select data-estunit="${esc(g.mint)}"><option value="token" ${est.unit !== 'usd' ? 'selected' : ''}>${esc(sym)}</option><option value="usd" ${est.unit === 'usd' ? 'selected' : ''}>USD</option></select>
+      <span class="hint">${estLine}</span>
+    </div>
+    <details><summary>By wallet (${g.byWallet.size})</summary><table><thead><tr><th>Wallet</th><th class="num">Received</th><th class="num">Per day</th><th class="num">Share</th></tr></thead><tbody>${walletRows}</tbody></table></details>
+    <details><summary>By sender / distributor (${g.bySender.size})</summary><table><thead><tr><th>Sender</th><th class="num">Amount</th><th class="num">Payouts</th><th class="num">Share</th></tr></thead><tbody>${senderRows}</tbody></table></details>
+    <details><summary>By day (${g.byDay.size})</summary><table><thead><tr><th>Day</th><th class="num">Amount</th><th class="num">Payouts</th>${price ? '<th class="num">USD</th>' : ''}</tr></thead><tbody>${dayRows}</tbody></table></details>
+    <details><summary>All payouts (${g.count})</summary><table><thead><tr><th>Time</th><th>Wallet</th><th class="num">Amount</th><th>Sender</th><th>Tx</th></tr></thead><tbody>${evRows}</tbody></table></details>
+  </div>`;
+}
+
+// ---------- CSV ----------
+function exportCsv() {
+  const r = state.results; if (!r) return;
+  const rows = [['time_iso', 'wallet', 'wallet_label', 'reward_mint', 'reward_symbol', 'amount', 'sender', 'sender_label', 'signature']];
+  for (const e of r.rewards.slice().sort((a, b) => a.time - b.time)) {
+    const lab = (r.wallets.find(x => x.address === e.wallet) || {}).label || '';
+    const snd = e.sender.split('|')[0];
+    rows.push([new Date(e.time * 1000).toISOString(), e.wallet, lab, e.mint, symbolOf(e.mint), e.amount, snd, labelOf(snd), e.sig]);
+  }
+  const csv = rows.map(r => r.map(v => /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : v).join(',')).join('\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = `rewards_${new Date(r.from * 1000).toISOString().slice(0, 10)}_${new Date(r.to * 1000).toISOString().slice(0, 10)}.csv`; a.click();
+}
+
+// ---------- wiring ----------
+$('provider').addEventListener('change', () => { onProviderChange(); saveSettings(); });
+$('period').addEventListener('change', () => { onPeriodChange(); saveSettings(); });
+for (const id of settingIds) $(id).addEventListener('change', saveSettings);
+$('run').addEventListener('click', run);
+$('cancel').addEventListener('click', () => { state.cancel = true; });
+$('exportCsv').addEventListener('click', exportCsv);
+$('clearCache').addEventListener('click', () => { txCache = {}; try { localStorage.removeItem(CACHE_KEY); } catch (e) {} log('Transaction cache cleared.'); });
+loadSettings();
+</script>
+</body>
+</html>
