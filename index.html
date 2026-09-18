@@ -93,11 +93,11 @@
     <div>
       <label for="strict">Reward detection</label>
       <select id="strict">
-        <option value="strict">Strict: inbound only, wallet sent nothing and did not sign (recommended)</option>
-        <option value="nosign">Inbound only, wallet did not sign</option>
+        <option value="strict">Strict: inbound only, no DEX/aggregator program, wallet sent nothing and did not sign (recommended)</option>
+        <option value="nosign">Inbound only, no DEX program, wallet did not sign</option>
         <option value="loose">Any inbound transfer (includes buys and swaps)</option>
       </select>
-      <div class="hint">Reflection payouts are pushed to you by a distributor. Anything where your wallet paid out a token, or signed the transaction, is a buy/swap/transfer, not a dividend.</div>
+      <div class="hint">Reflection payouts are pushed to you by a distributor. Anything that ran through a DEX, aggregator, limit-order or DCA program, or where your wallet paid out a token or signed, is a trade, not a dividend. You can also ignore a token or a sender from its card below.</div>
     </div>
     <div>
       <label for="minAmt">Ignore dust below (reward-token units)</label>
@@ -178,7 +178,36 @@ const KNOWN_TOKENS = {
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': { symbol: 'USDC', name: 'USD Coin' },
 };
 const LS_KEY = 'rrt.settings.v1';
-const CACHE_KEY = 'rrt.txcache.v1';
+const CACHE_KEY = 'rrt.txcache.v2';
+// Programs whose presence in a transaction means it was a trade, not a pushed reward payout.
+// Covers aggregators, AMMs, launchpads, limit-order / DCA keepers and popular trading bots' routers.
+const DEX_PROGRAMS = {
+  'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4': 'Jupiter v6',
+  'JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB': 'Jupiter v4',
+  'jupoNjAxXgZ4rjzxzPMP4oxduvQsQtZzyknqvzYNrNu': 'Jupiter Limit Order',
+  'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X': 'Jupiter Limit Order v2',
+  'DCA265Vj8a9CEuX1eb1LWRnDT7uK6q1xMipnNyatn23M': 'Jupiter DCA',
+  '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8': 'Raydium AMM',
+  'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK': 'Raydium CLMM',
+  'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C': 'Raydium CPMM',
+  'LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj': 'Raydium LaunchLab',
+  '5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h': 'Raydium Stable',
+  'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc': 'Orca Whirlpool',
+  '9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP': 'Orca v2',
+  'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo': 'Meteora DLMM',
+  'Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB': 'Meteora Pools',
+  'cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG': 'Meteora DAMM v2',
+  'dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN': 'Meteora DBC',
+  '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P': 'Pump.fun',
+  'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA': 'PumpSwap',
+  'PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY': 'Phoenix',
+  'opnb2LAfJYbRMAHHvqjCwQxanZn7ReEHp1k81EohpZb': 'OpenBook v2',
+  '2wT8Yq49kHgDzXuPxZSaeLaH1qbmGXtEyPy64bL7aD3c': 'Lifinity v2',
+  '6m2CDdhRgxpH4WjvdzxAYbGxwdGUz5MziiL5jek2kBma': 'OKX DEX',
+  'BSfD6SHZigAfDWSjzD5Q41jw8LmKwtmjskPH9XW1mrRW': 'Photon',
+  'SoLFiHG9TfgtdUXUjWAxi3LtvYuFyDLVhBWxdMZxyCe': 'SolFi',
+  'obriQD1zbpyLz95G5n7nJe6a4DPjpFwa5XYPoNm113y': 'Obric v2',
+};
 
 // ---------- settings persistence ----------
 const $ = id => document.getElementById(id);
@@ -191,15 +220,18 @@ function loadSettings() {
   if (!s.addresses) $('addresses').value = '7Tug5Qgqcnnf16FNqwDqFVx2YV6UVMVnhmJZXdGJmUVb main';
   state.estimates = s.estimates || {};
   state.labels = s.labels || {};
+  state.ignoredMints = s.ignoredMints || {};
+  state.ignoredSenders = s.ignoredSenders || {};
   onProviderChange(); onPeriodChange();
 }
 function saveSettings() {
   const s = {};
   for (const id of settingIds) s[id] = $(id).value;
   s.estimates = state.estimates; s.labels = state.labels;
+  s.ignoredMints = state.ignoredMints; s.ignoredSenders = state.ignoredSenders;
   try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch (e) {}
 }
-const state = { estimates: {}, labels: {}, results: null, cancel: false, meta: {} };
+const state = { estimates: {}, labels: {}, ignoredMints: {}, ignoredSenders: {}, results: null, cancel: false, meta: {} };
 
 function onProviderChange() {
   const p = $('provider').value;
@@ -299,7 +331,7 @@ function saveCache() {
 /*
  Normalized event shape used by both providers:
  { sig, time (unix s), wallet, mint, decimals, amount (ui units, +in), sender (owner addr or ''),
-   walletSigned (bool|null), walletSentAnything (bool) }
+   walletSigned (bool|null), walletSentAnything (bool), dex (string: DEX/aggregator program name seen in the tx, or '') }
  One event per (tx, wallet, mint) with net inbound amount > 0.
 */
 
@@ -334,7 +366,7 @@ async function solscanFetchWallet(w, from, to, key, onPage) {
   }
   const events = [];
   for (const g of byTx.values()) for (const e of g.inbound.values()) {
-    events.push({ sig: g.sig, time: g.time, wallet: w.address, mint: e.mint, decimals: e.decimals, amount: e.amount, sender: [...e.senders].join('|'), walletSigned: null, walletSentAnything: g.sentAnything });
+    events.push({ sig: g.sig, time: g.time, wallet: w.address, mint: e.mint, decimals: e.decimals, amount: e.amount, sender: [...e.senders].join('|'), walletSigned: null, walletSentAnything: g.sentAnything, dex: '' });
   }
   return events;
 }
@@ -426,7 +458,7 @@ async function rpcFetchWallet(w, from, to, url, conc, onStep) {
       if (!(v.amount > 1e-12)) continue;
       const mint = k.split('|')[1];
       const senders = [...deltas].filter(([k2, v2]) => k2.endsWith('|' + mint) && !k2.startsWith(w.address + '|') && v2.amount < 0).map(([k2]) => k2.split('|')[0]);
-      events.push({ sig, time: bt, wallet: w.address, mint, decimals: v.decimals, amount: v.amount, sender: senders.join('|'), walletSigned: n.signers.includes(w.address), walletSentAnything: sentAnything });
+      events.push({ sig, time: bt, wallet: w.address, mint, decimals: v.decimals, amount: v.amount, sender: senders.join('|'), walletSigned: n.signers.includes(w.address), walletSentAnything: sentAnything, dex: n.dex || '' });
     }
   }
   return events;
@@ -452,7 +484,13 @@ function normalizeTx(sig, tx) {
   const solOut = [];
   const preB = meta.preBalances || [], postB = meta.postBalances || [];
   keys.forEach((k, i) => { const d = (postB[i] ?? 0) - (preB[i] ?? 0); const fee = i === 0 ? (meta.fee || 0) : 0; if (d + fee < -1e4) solOut.push(k.pubkey); });
-  return { deltas, signers, solOut, time: tx.blockTime };
+  const progs = new Set(keys.map(k => k.pubkey));
+  const msg = tx.transaction && tx.transaction.message;
+  for (const ix of (msg && msg.instructions) || []) if (ix.programId) progs.add(ix.programId);
+  for (const inner of meta.innerInstructions || []) for (const ix of inner.instructions || []) if (ix.programId) progs.add(ix.programId);
+  let dex = '';
+  for (const p of progs) if (DEX_PROGRAMS[p]) { dex = DEX_PROGRAMS[p]; break; }
+  return { deltas, signers, solOut, dex, time: tx.blockTime };
 }
 
 // ---------- token metadata via Jupiter (public, CORS-enabled) ----------
@@ -496,14 +534,19 @@ async function run() {
     }
     // classification
     const mode = $('strict').value; const minAmt = Number($('minAmt').value) || 0;
+    const excluded = { dex: 0, signed: 0, sent: 0, ignoredMint: 0, ignoredSender: 0, dust: 0 };
     const rewards = events.filter(e => {
-      if (e.amount < minAmt) return false;
+      if (e.amount < minAmt) { excluded.dust++; return false; }
+      if (state.ignoredMints[e.mint]) { excluded.ignoredMint++; return false; }
+      if (e.sender.split('|').some(sn => state.ignoredSenders[sn])) { excluded.ignoredSender++; return false; }
       if (mode === 'loose') return true;
-      if (e.walletSigned === true) return false;
-      if (mode === 'strict' && e.walletSentAnything) return false;
+      if (e.dex) { excluded.dex++; return false; }
+      if (e.walletSigned === true) { excluded.signed++; return false; }
+      if (mode === 'strict' && e.walletSentAnything) { excluded.sent++; return false; }
       return true;
     });
-    log(`${rewards.length} of ${events.length} inbound events classified as rewards (${mode}).`);
+    log(`${rewards.length} of ${events.length} inbound events classified as rewards (${mode}). Excluded: ${excluded.dex} via DEX/aggregator program, ${excluded.signed} signed by wallet, ${excluded.sent} wallet sent something, ${excluded.ignoredMint} ignored token, ${excluded.ignoredSender} ignored sender, ${excluded.dust} dust.`);
+    state.excluded = excluded;
     // metadata
     const mints = [...new Set(rewards.map(e => e.mint))];
     let meta = {};
@@ -541,7 +584,8 @@ function render() {
   $('results').style.display = '';
   const days = (r.to - r.from) / 86400;
   const byMint = new Map();
-  for (const e of r.rewards) {
+  const visible = r.rewards.filter(e => !state.ignoredMints[e.mint] && !e.sender.split('|').some(sn => state.ignoredSenders[sn]));
+  for (const e of visible) {
     let g = byMint.get(e.mint); if (!g) { g = { mint: e.mint, total: 0, count: 0, byWallet: new Map(), bySender: new Map(), byDay: new Map(), events: [] }; byMint.set(e.mint, g); }
     g.total += e.amount; g.count++; g.events.push(e);
     g.byWallet.set(e.wallet, (g.byWallet.get(e.wallet) || 0) + e.amount);
@@ -559,12 +603,23 @@ function render() {
       <td class="num">${v != null ? usd(v) : '—'}</td><td class="num">${v != null ? usd(v / days) : '—'}</td></tr>`;
   }).join('');
   $('summary').innerHTML = groups.length ? `
-    <div class="hint" style="margin-bottom:6px">${r.wallets.length} wallet(s), ${days.toFixed(2)} days, detection mode: ${esc(r.mode)}. ${r.events.length - r.rewards.length} inbound events excluded as buys/swaps/self-transfers.</div>
+    <div class="hint" style="margin-bottom:6px">${r.wallets.length} wallet(s), ${days.toFixed(2)} days, detection mode: ${esc(r.mode)}. ${r.events.length - visible.length} inbound events excluded as trades, self-transfers or ignored.</div>
     <table><thead><tr><th>Reward token</th><th class="num">Received</th><th class="num">Per day</th><th class="num">Payouts</th><th class="num">USD (now)</th><th class="num">USD / day</th></tr></thead>
     <tbody>${sumRows}</tbody>${anyPrice ? `<tfoot><tr><th colspan="4">Total at current prices</th><th class="num">${usd(totalUsd)}</th><th class="num">${usd(totalUsd / days)}</th></tr></tfoot>` : ''}</table>`
     : '<div class="banner">No reward payouts found in this window. Try a longer window, or set detection to "Any inbound transfer" to see everything that arrived.</div>';
+  // ignored items
+  const igM = Object.keys(state.ignoredMints), igS = Object.keys(state.ignoredSenders);
+  const ignoredHtml = (igM.length || igS.length) ? `<details><summary>Ignored tokens (${igM.length}) and senders (${igS.length})</summary>
+    ${igM.map(m => `<div class="hint">Token <span class="mono">${esc(symbolOf(m))} ${esc(short(m))}</span> <button class="secondary" data-unignore-mint="${esc(m)}" style="padding:2px 8px;font-size:11px">restore</button></div>`).join('')}
+    ${igS.map(a => `<div class="hint">Sender <span class="mono">${esc(labelOf(a) || short(a))}</span> <button class="secondary" data-unignore-sender="${esc(a)}" style="padding:2px 8px;font-size:11px">restore</button></div>`).join('')}
+  </details>` : '';
+  $('summary').insertAdjacentHTML('beforeend', ignoredHtml);
   // cards
   $('cards').innerHTML = groups.map(g => renderCard(g, days, r)).join('');
+  document.querySelectorAll('[data-ignore-mint]').forEach(b => b.addEventListener('click', () => { state.ignoredMints[b.dataset.ignoreMint] = true; saveSettings(); render(); }));
+  document.querySelectorAll('[data-ignore-sender]').forEach(b => b.addEventListener('click', () => { state.ignoredSenders[b.dataset.ignoreSender] = true; saveSettings(); render(); }));
+  document.querySelectorAll('[data-unignore-mint]').forEach(b => b.addEventListener('click', () => { delete state.ignoredMints[b.dataset.unignoreMint]; saveSettings(); render(); }));
+  document.querySelectorAll('[data-unignore-sender]').forEach(b => b.addEventListener('click', () => { delete state.ignoredSenders[b.dataset.unignoreSender]; saveSettings(); render(); }));
   // wire estimate inputs and label inputs
   document.querySelectorAll('[data-est]').forEach(inp => inp.addEventListener('change', () => {
     const mint = inp.dataset.est; const unitSel = document.querySelector(`[data-estunit="${mint}"]`);
@@ -599,7 +654,9 @@ function renderCard(g, days, r) {
   const senderRows = [...g.bySender].sort((a, b) => b[1].amount - a[1].amount).map(([s, v]) => {
     const first = s.split('|')[0];
     return `<tr><td><a class="mono" href="https://solscan.io/account/${esc(first)}" target="_blank" rel="noopener">${esc(short(first))}</a>${s.includes('|') ? ' <span class="pill">+' + (s.split('|').length - 1) + '</span>' : ''}
-      <input type="text" data-label="${esc(first)}" value="${esc(labelOf(first))}" placeholder="label (e.g. KNOTS distributor)" style="width:220px;display:inline-block;margin-left:8px"></td>
+      <input type="text" data-label="${esc(first)}" value="${esc(labelOf(first))}" placeholder="label (e.g. KNOTS distributor)" style="width:220px;display:inline-block;margin-left:8px">
+      ${v.count === 1 ? '<span class="pill warn" title="Only one payout from this sender in the window. Distributors usually pay repeatedly; a one-off may be a trade or a manual transfer.">one-off</span>' : ''}
+      <button class="secondary" data-ignore-sender="${esc(first)}" style="padding:2px 8px;font-size:11px;margin-left:6px" title="Exclude this sender from all tallies (remembered)">ignore</button></td>
       <td class="num">${fmt(v.amount)}</td><td class="num">${v.count}</td><td class="num">${(100 * v.amount / g.total).toFixed(1)}%</td></tr>`;
   }).join('');
   const dayRows = [...g.byDay].map(([d, v]) => `<tr><td>${esc(d)}</td><td class="num">${fmt(v.amount)}</td><td class="num">${v.count}</td>${price ? `<td class="num">${usd(v.amount * price)}</td>` : ''}</tr>`).join('');
@@ -610,7 +667,8 @@ function renderCard(g, days, r) {
       <td class="mono">${esc(labelOf(snd) || short(snd))}</td><td><a class="mono" href="https://solscan.io/tx/${esc(e.sig)}" target="_blank" rel="noopener">${esc(short(e.sig))}</a></td></tr>`;
   }).join('');
   return `<div class="card">
-    <h3>${esc(sym)} <small><a href="https://solscan.io/token/${esc(g.mint)}" target="_blank" rel="noopener">${esc(g.mint)}</a></small>${m.name ? `<span class="pill">${esc(m.name)}</span>` : ''}</h3>
+    <h3>${esc(sym)} <small><a href="https://solscan.io/token/${esc(g.mint)}" target="_blank" rel="noopener">${esc(g.mint)}</a></small>${m.name ? `<span class="pill">${esc(m.name)}</span>` : ''}
+      <button class="secondary" data-ignore-mint="${esc(g.mint)}" style="padding:2px 8px;font-size:11px;margin-left:auto" title="None of my holdings pay this token: hide it from all tallies (remembered)">ignore this token</button></h3>
     <div class="kpis">
       <div class="kpi"><div class="v">${fmt(g.total)}</div><div class="l">received in window</div></div>
       <div class="kpi"><div class="v">${fmt(perDay)}</div><div class="l">per day</div></div>

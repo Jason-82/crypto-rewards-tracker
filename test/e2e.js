@@ -4,6 +4,8 @@ const DIST = 'DistributorWa11et1111111111111111111111111111';
 const STONK = 'DC6HP2A7SUy49WeazfeWgbwxVpzKdEPuB46mtb7XBzWx';
 const ZEC = 'ZecMint111111111111111111111111111111111111';
 const KNOTS = 'KnotsMint1111111111111111111111111111111111';
+const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const JUP_LO = 'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X';
 const now = Math.floor(Date.now()/1000);
 // Solscan mock: 2 STONK payouts, 1 ZEC payout, 1 KNOTS buy (STONK out, KNOTS in) -> excluded
 const solscanRows = [
@@ -16,6 +18,10 @@ const solscanRows = [
 ];
 function tokBal(idx, mint, owner, amt, dec){ return { accountIndex: idx, mint, owner, uiTokenAmount:{ amount:String(amt), decimals:dec } }; }
 const rpcTxs = {
+  sigE: { blockTime: now-5000, meta:{ err:null, fee:5000, preBalances:[10,20,30,40,50], postBalances:[10-5000,20,30,40,50],
+      preTokenBalances:[tokBal(2,KNOTS,'escrowPda',500000000,6), tokBal(3,USDC,W,0,6), tokBal(4,USDC,'pool',1e9,6)], postTokenBalances:[tokBal(2,KNOTS,'escrowPda',0,6), tokBal(3,USDC,W,42000000,6), tokBal(4,USDC,'pool',1e9-42000000,6)],
+      innerInstructions:[{ index:0, instructions:[{ programId: JUP_LO, accounts:[] }] }] },
+    transaction:{ message:{ accountKeys:[{pubkey:'keeper',signer:true},{pubkey:JUP_LO,signer:false},{pubkey:'escAta',signer:false},{pubkey:'myUsdc',signer:false},{pubkey:'poolAta',signer:false}], instructions:[{ programId: JUP_LO }] } } },
   sigA: { blockTime: now-3600, meta:{ err:null, fee:5000, preBalances:[10,20,30], postBalances:[10-5000,20,30],
       preTokenBalances:[tokBal(1,STONK,DIST,100000000,6), tokBal(2,STONK,W,0,6)], postTokenBalances:[tokBal(1,STONK,DIST,98500000,6), tokBal(2,STONK,W,1500000,6)] },
     transaction:{ message:{ accountKeys:[{pubkey:DIST,signer:true},{pubkey:'distAta',signer:false},{pubkey:'myAta',signer:false}] } } },
@@ -43,8 +49,8 @@ const rpcTxs = {
       const body = route.request().postDataJSON();
       const handle = (req) => {
         const { method, params } = req; let result;
-        if (method==='getTokenAccountsByOwner') result = { value: params[1].programId.startsWith('Tokenkeg') ? [ { pubkey:'myAta', account:{ data:{ parsed:{ info:{ mint:STONK, tokenAmount:{decimals:6} } } } } }, { pubkey:'myKnots', account:{ data:{ parsed:{ info:{ mint:KNOTS, tokenAmount:{decimals:6} } } } } } ] : [] };
-        else if (method==='getSignaturesForAddress') result = params[0]==='myAta' ? [ {signature:'sigA', blockTime:now-3600, err:null}, {signature:'sigD', blockTime:now-10000, err:null}, {signature:'sigOld', blockTime:now-40*86400, err:null} ] : [ {signature:'sigD', blockTime:now-10000, err:null} ];
+        if (method==='getTokenAccountsByOwner') result = { value: params[1].programId.startsWith('Tokenkeg') ? [ { pubkey:'myAta', account:{ data:{ parsed:{ info:{ mint:STONK, tokenAmount:{decimals:6} } } } } }, { pubkey:'myKnots', account:{ data:{ parsed:{ info:{ mint:KNOTS, tokenAmount:{decimals:6} } } } } }, { pubkey:'myUsdc', account:{ data:{ parsed:{ info:{ mint:USDC, tokenAmount:{decimals:6} } } } } } ] : [] };
+        else if (method==='getSignaturesForAddress') result = params[0]==='myAta' ? [ {signature:'sigA', blockTime:now-3600, err:null}, {signature:'sigD', blockTime:now-10000, err:null}, {signature:'sigOld', blockTime:now-40*86400, err:null} ] : params[0]==='myUsdc' ? [ {signature:'sigE', blockTime:now-5000, err:null} ] : [ {signature:'sigD', blockTime:now-10000, err:null} ];
         else if (method==='getTransaction') result = rpcTxs[params[0]] || null;
         else throw new Error('unexpected '+method);
         return { jsonrpc:'2.0', id:req.id, result };
@@ -70,9 +76,22 @@ const rpcTxs = {
   console.log('STATUS(rpc):', await page.textContent('#status'));
   console.log(await page.$eval('#summary', e => e.innerText));
   console.log('LOG:\n' + await page.textContent('#log'));
+  const strictSummary = await page.$eval('#summary', e => e.innerText);
+  if (strictSummary.includes('USDC')) { console.log('FAIL: USDC limit-order fill counted as reward in strict mode'); process.exit(1); }
+  console.log('OK: DEX-program fill excluded in strict mode');
   // loose mode should include the KNOTS buy
   await page.selectOption('#strict', 'loose'); await page.click('#run'); await page.waitForFunction(() => document.getElementById('run').disabled===false);
   console.log('LOOSE:', await page.$eval('#summary', e => e.innerText.split('\n').slice(0,6).join(' | ')));
+  const loose = await page.$eval('#summary', e => e.innerText);
+  if (!loose.includes('USDC')) { console.log('FAIL: loose mode should show USDC'); process.exit(1); }
+  await page.click('[data-ignore-mint="'+USDC+'"]');
+  const afterIgnore = await page.$eval('#summary', e => e.innerText);
+  if (afterIgnore.includes('USDC StonkFun') || /^USDC/m.test(afterIgnore.split('Ignored')[0])) { console.log('FAIL: ignore token did not hide USDC'); process.exit(1); }
+  console.log('OK: ignore token hides USDC; summary now:', afterIgnore.split('\n').filter(l=>/USDC|Ignored/.test(l)).join(' | '));
+  await page.$eval('#summary details', d => d.open = true);
+  await page.click('[data-unignore-mint="'+USDC+'"]');
+  if (!(await page.$eval('#summary', e => e.innerText)).includes('USDC')) { console.log('FAIL: restore did not bring USDC back'); process.exit(1); }
+  console.log('OK: restore works');
   await page.screenshot({ path: require('path').join(__dirname, 'shot.png'), fullPage: true });
   await browser.close();
 })().catch(e => { console.error(e); process.exit(1); });
