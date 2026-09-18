@@ -73,20 +73,20 @@
     <div>
       <label for="provider">Provider</label>
       <select id="provider">
-        <option value="solscan">Solscan Pro API (needs API key, fastest)</option>
-        <option value="rpc">Solana JSON-RPC (any RPC URL, no Solscan key)</option>
+        <option value="rpc">Solana JSON-RPC (recommended; free Helius key or any RPC URL)</option>
+        <option value="solscan">Solscan Pro API (paid tier required for account transfers)</option>
       </select>
       <div class="hint" id="providerHint"></div>
     </div>
     <div id="solscanFields">
       <label for="solscanKey">Solscan Pro API key</label>
       <input type="password" id="solscanKey" placeholder="paste key from solscan.io/apis" autocomplete="off">
-      <div class="hint">Sent only to pro-api.solscan.io as the <span class="mono">token</span> header. Stored in this browser's localStorage.</div>
+      <div class="hint">Sent only to pro-api.solscan.io as the <span class="mono">token</span> header. Stored in this browser's localStorage. Solscan's free key tier does not include the transfer endpoint this needs; if you see "upgrade your api key level", use the RPC provider instead.</div>
     </div>
     <div id="rpcFields" style="display:none">
       <label for="rpcUrl">RPC URL</label>
       <input type="text" id="rpcUrl" class="mono" placeholder="https://mainnet.helius-rpc.com/?api-key=... or https://api.mainnet-beta.solana.com">
-      <div class="hint">The public mainnet-beta endpoint is heavily rate-limited; a free Helius/QuickNode/Triton key works much better. Optional: paste a Helius, Jupiter, or other RPC.</div>
+      <div class="hint">Get a free key at <a href="https://dashboard.helius.dev/" target="_blank" rel="noopener">dashboard.helius.dev</a> and paste the mainnet RPC URL it shows. Leaving this blank uses the public mainnet-beta endpoint, which is slow and rate-limited.</div>
     </div>
   </div>
   <div class="row c3" style="margin-top:10px">
@@ -187,6 +187,7 @@ function loadSettings() {
   let s = {};
   try { s = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch (e) { s = {}; }
   for (const id of settingIds) if (s[id] !== undefined) $(id).value = s[id];
+  if (!s.provider) $('provider').value = 'rpc';
   if (!s.addresses) $('addresses').value = '7Tug5Qgqcnnf16FNqwDqFVx2YV6UVMVnhmJZXdGJmUVb main';
   state.estimates = s.estimates || {};
   state.labels = s.labels || {};
@@ -269,6 +270,7 @@ async function fetchJson(url, opts = {}, tries = 5) {
     }
     if (!res.ok) {
       let body = ''; try { body = (await res.text()).slice(0, 200); } catch (e) {}
+      if (res.status === 401 && /upgrade your api key/i.test(body)) throw new Error('Solscan says this API key tier does not include the account/transfer endpoint. Switch Provider to "Solana JSON-RPC" (free Helius key) instead.');
       throw new Error(`HTTP ${res.status} from ${new URL(url).host}: ${body}`);
     }
     return res.json();

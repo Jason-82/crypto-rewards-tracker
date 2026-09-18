@@ -11,12 +11,16 @@ No Python, no build step, no server. Open `index.html` in a browser.
 
 1. **Open** `index.html` (double-click it, or drag it into Chrome/Firefox/Safari).
 2. **Pick a data source**
-   - **Solscan Pro API** (recommended): paste an API key from [solscan.io/apis](https://solscan.io/apis).
-     One request per 100 transfers, so a week is usually a handful of calls per wallet.
-   - **Solana JSON-RPC**: paste any RPC URL (a free Helius/QuickNode/Triton key works well; the public
-     `api.mainnet-beta.solana.com` endpoint works but is rate-limited). No Solscan key needed. The app
-     enumerates your token accounts, lists their signatures in the window, fetches each transaction and
-     diffs token balances. Fetched transactions are cached in the browser so repeat runs are fast.
+   - **Solana JSON-RPC** (recommended, free): create a free account at
+     [dashboard.helius.dev](https://dashboard.helius.dev/), copy the mainnet RPC URL it gives you
+     (`https://mainnet.helius-rpc.com/?api-key=...`) and paste it into the RPC URL box. Any other RPC
+     works too; the public `api.mainnet-beta.solana.com` endpoint works but is slow and rate-limited.
+     The app enumerates your token accounts, lists their signatures in the window, fetches each
+     transaction and diffs token balances. Fetched transactions are cached in the browser so repeat
+     runs are fast.
+   - **Solscan Pro API**: uses `/account/transfer`, one request per 100 transfers. Solscan's free key
+     tier does **not** include this endpoint (it returns "Unauthorized: Please upgrade your api key
+     level"); it needs a paid plan.
 3. **Paste wallet addresses**, one per line, optionally followed by a label.
 4. **Choose the window** (last 1/2/3/7/14/30 days, or a custom local-time range) and click **Fetch rewards**.
 5. Read the table: per reward token, total received, per-day rate, payout count, and USD at current price
