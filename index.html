@@ -153,6 +153,16 @@
 </section>
 
 <section>
+  <h2>Inspect a transaction</h2>
+  <div class="row c4">
+    <div style="grid-column: span 3"><label for="inspectSig">Signature</label><input type="text" id="inspectSig" class="mono" placeholder="paste a transaction signature to see why it was or wasn't counted"></div>
+    <div><label>&nbsp;</label><button class="secondary" id="inspectBtn">Inspect</button></div>
+  </div>
+  <div class="hint">Uses the RPC URL above (or the public endpoint). Copy the output when reporting a misclassified payout.</div>
+  <pre id="inspectOut" class="mono" style="white-space:pre-wrap;font-size:12px;color:var(--muted);margin-top:8px"></pre>
+</section>
+
+<section>
   <h2>Notes</h2>
   <ul class="hint" style="margin:0; padding-left:18px">
     <li>"Per day" divides the window total by the window length in days. Compare it with the daily estimate on thestonkboard.com (their estimate is holding USD × APR ÷ 365, modeled from recent payouts, so it drifts with trading volume).</li>
@@ -178,7 +188,8 @@ const KNOWN_TOKENS = {
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': { symbol: 'USDC', name: 'USD Coin' },
 };
 const LS_KEY = 'rrt.settings.v1';
-const CACHE_KEY = 'rrt.txcache.v2';
+const CACHE_KEY = 'rrt.txcache.v3';
+const BORING_PROGRAMS = new Set(['11111111111111111111111111111111', TOKEN_PROGRAM, TOKEN_2022_PROGRAM, 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL', 'ComputeBudget111111111111111111111111111111', 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr', 'Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo']);
 // Programs whose presence in a transaction means it was a trade, not a pushed reward payout.
 // Covers aggregators, AMMs, launchpads, limit-order / DCA keepers and popular trading bots' routers.
 const DEX_PROGRAMS = {
@@ -366,7 +377,7 @@ async function solscanFetchWallet(w, from, to, key, onPage) {
   }
   const events = [];
   for (const g of byTx.values()) for (const e of g.inbound.values()) {
-    events.push({ sig: g.sig, time: g.time, wallet: w.address, mint: e.mint, decimals: e.decimals, amount: e.amount, sender: [...e.senders].join('|'), walletSigned: null, walletSentAnything: g.sentAnything, dex: '' });
+    events.push({ sig: g.sig, time: g.time, wallet: w.address, mint: e.mint, decimals: e.decimals, amount: e.amount, sender: [...e.senders].join('|'), walletSigned: null, walletSentAnything: g.sentAnything, dex: '', progs: [] });
   }
   return events;
 }
@@ -458,7 +469,7 @@ async function rpcFetchWallet(w, from, to, url, conc, onStep) {
       if (!(v.amount > 1e-12)) continue;
       const mint = k.split('|')[1];
       const senders = [...deltas].filter(([k2, v2]) => k2.endsWith('|' + mint) && !k2.startsWith(w.address + '|') && v2.amount < 0).map(([k2]) => k2.split('|')[0]);
-      events.push({ sig, time: bt, wallet: w.address, mint, decimals: v.decimals, amount: v.amount, sender: senders.join('|'), walletSigned: n.signers.includes(w.address), walletSentAnything: sentAnything, dex: n.dex || '' });
+      events.push({ sig, time: bt, wallet: w.address, mint, decimals: v.decimals, amount: v.amount, sender: senders.join('|'), walletSigned: n.signers.includes(w.address), walletSentAnything: sentAnything, dex: n.dex || '', progs: n.progs || [] });
     }
   }
   return events;
@@ -484,13 +495,14 @@ function normalizeTx(sig, tx) {
   const solOut = [];
   const preB = meta.preBalances || [], postB = meta.postBalances || [];
   keys.forEach((k, i) => { const d = (postB[i] ?? 0) - (preB[i] ?? 0); const fee = i === 0 ? (meta.fee || 0) : 0; if (d + fee < -1e4) solOut.push(k.pubkey); });
-  const progs = new Set(keys.map(k => k.pubkey));
   const msg = tx.transaction && tx.transaction.message;
-  for (const ix of (msg && msg.instructions) || []) if (ix.programId) progs.add(ix.programId);
-  for (const inner of meta.innerInstructions || []) for (const ix of inner.instructions || []) if (ix.programId) progs.add(ix.programId);
+  const ixProgs = new Set();
+  for (const ix of (msg && msg.instructions) || []) if (ix.programId) ixProgs.add(ix.programId);
+  for (const inner of meta.innerInstructions || []) for (const ix of inner.instructions || []) if (ix.programId) ixProgs.add(ix.programId);
   let dex = '';
-  for (const p of progs) if (DEX_PROGRAMS[p]) { dex = DEX_PROGRAMS[p]; break; }
-  return { deltas, signers, solOut, dex, time: tx.blockTime };
+  for (const p of [...ixProgs, ...keys.map(k => k.pubkey)]) if (DEX_PROGRAMS[p]) { dex = DEX_PROGRAMS[p]; break; }
+  const progs = [...ixProgs].filter(p => !BORING_PROGRAMS.has(p));
+  return { deltas, signers, solOut, dex, progs, time: tx.blockTime };
 }
 
 // ---------- token metadata via Jupiter (public, CORS-enabled) ----------
@@ -532,6 +544,18 @@ async function run() {
       log(`${w.label}: ${ev.length} inbound token events`);
       events.push(...ev);
     }
+    // cross-wallet: if ANY of your wallets signed or paid out in a transaction, it is a trade/transfer for all of them
+    const signedSigs = new Set(), sentSigs = new Set();
+    for (const e of events) { if (e.walletSigned === true) signedSigs.add(e.sig); if (e.walletSentAnything) sentSigs.add(e.sig); }
+    if (provider === 'rpc') {
+      const mine = new Set(wallets.map(w => w.address));
+      for (const e of events) {
+        const n = txCache[e.sig]; if (!n || n.err) continue;
+        if (n.signers.some(a => mine.has(a))) signedSigs.add(e.sig);
+        if (n.deltas.some(d => mine.has(d.owner) && d.amount < -1e-12) || n.solOut.some(a => mine.has(a))) sentSigs.add(e.sig);
+      }
+    }
+    for (const e of events) { if (signedSigs.has(e.sig)) e.walletSigned = true; if (sentSigs.has(e.sig)) e.walletSentAnything = true; }
     // classification
     const mode = $('strict').value; const minAmt = Number($('minAmt').value) || 0;
     const excluded = { dex: 0, signed: 0, sent: 0, ignoredMint: 0, ignoredSender: 0, dust: 0 };
@@ -663,8 +687,9 @@ function renderCard(g, days, r) {
   const evRows = g.events.sort((a, b) => b.time - a.time).map(e => {
     const lab = (r.wallets.find(x => x.address === e.wallet) || {}).label || short(e.wallet);
     const snd = e.sender.split('|')[0];
+    const via = (e.progs || []).map(p => DEX_PROGRAMS[p] || short(p)).join(', ');
     return `<tr><td>${new Date(e.time * 1000).toLocaleString()}</td><td>${esc(lab)}</td><td class="num">${fmt(e.amount)}</td>
-      <td class="mono">${esc(labelOf(snd) || short(snd))}</td><td><a class="mono" href="https://solscan.io/tx/${esc(e.sig)}" target="_blank" rel="noopener">${esc(short(e.sig))}</a></td></tr>`;
+      <td class="mono">${esc(labelOf(snd) || short(snd))}</td><td class="mono hint">${esc(via || (e.progs ? 'token transfer' : ''))}</td><td><a class="mono" href="https://solscan.io/tx/${esc(e.sig)}" target="_blank" rel="noopener">${esc(short(e.sig))}</a></td></tr>`;
   }).join('');
   return `<div class="card">
     <h3>${esc(sym)} <small><a href="https://solscan.io/token/${esc(g.mint)}" target="_blank" rel="noopener">${esc(g.mint)}</a></small>${m.name ? `<span class="pill">${esc(m.name)}</span>` : ''}
@@ -684,7 +709,7 @@ function renderCard(g, days, r) {
     <details><summary>By wallet (${g.byWallet.size})</summary><table><thead><tr><th>Wallet</th><th class="num">Received</th><th class="num">Per day</th><th class="num">Share</th></tr></thead><tbody>${walletRows}</tbody></table></details>
     <details><summary>By sender / distributor (${g.bySender.size})</summary><table><thead><tr><th>Sender</th><th class="num">Amount</th><th class="num">Payouts</th><th class="num">Share</th></tr></thead><tbody>${senderRows}</tbody></table></details>
     <details><summary>By day (${g.byDay.size})</summary><table><thead><tr><th>Day</th><th class="num">Amount</th><th class="num">Payouts</th>${price ? '<th class="num">USD</th>' : ''}</tr></thead><tbody>${dayRows}</tbody></table></details>
-    <details><summary>All payouts (${g.count})</summary><table><thead><tr><th>Time</th><th>Wallet</th><th class="num">Amount</th><th>Sender</th><th>Tx</th></tr></thead><tbody>${evRows}</tbody></table></details>
+    <details><summary>All payouts (${g.count})</summary><table><thead><tr><th>Time</th><th>Wallet</th><th class="num">Amount</th><th>Sender</th><th>Via program(s)</th><th>Tx</th></tr></thead><tbody>${evRows}</tbody></table></details>
   </div>`;
 }
 
@@ -701,6 +726,46 @@ function exportCsv() {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
   a.download = `rewards_${new Date(r.from * 1000).toISOString().slice(0, 10)}_${new Date(r.to * 1000).toISOString().slice(0, 10)}.csv`; a.click();
 }
+
+// ---------- inspector ----------
+async function inspect() {
+  const sig = $('inspectSig').value.trim(); const out = $('inspectOut');
+  if (!sig) { out.textContent = 'Paste a signature first.'; return; }
+  out.textContent = 'Fetching…';
+  try {
+    const url = $('rpcUrl').value.trim() || 'https://api.mainnet-beta.solana.com';
+    const tx = await rpc(url, 'getTransaction', [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'confirmed' }]);
+    if (!tx) { out.textContent = 'Transaction not found (RPC may have pruned it, or wrong network).'; return; }
+    const n = normalizeTx(sig, tx);
+    let mine = new Set(); try { mine = new Set(parseAddresses().map(w => w.address)); } catch (e) {}
+    const tag = a => mine.has(a) ? ' <-- YOUR WALLET' : '';
+    const keys = tx.transaction.message.accountKeys || [];
+    const lines = [];
+    lines.push(`Signature: ${sig}`);
+    lines.push(`Time: ${tx.blockTime ? new Date(tx.blockTime * 1000).toLocaleString() : '?'}   Slot: ${tx.slot}   Status: ${n.err ? 'FAILED' : 'ok'}`);
+    lines.push(`Signers: ${n.signers.map(a => a + tag(a)).join(', ') || '(none)'}`);
+    const allProgs = new Set(); for (const ix of tx.transaction.message.instructions || []) allProgs.add(ix.programId);
+    for (const inner of (tx.meta && tx.meta.innerInstructions) || []) for (const ix of inner.instructions || []) allProgs.add(ix.programId);
+    lines.push('Programs invoked:');
+    for (const p of allProgs) lines.push(`  ${p}  ${DEX_PROGRAMS[p] ? '[DEX: ' + DEX_PROGRAMS[p] + ']' : BORING_PROGRAMS.has(p) ? '(system)' : '(unknown to this tool)'}`);
+    const dexInKeys = keys.map(k => k.pubkey).filter(p => DEX_PROGRAMS[p] && !allProgs.has(p));
+    if (dexInKeys.length) lines.push(`DEX programs referenced in account keys: ${dexInKeys.map(p => DEX_PROGRAMS[p]).join(', ')}`);
+    lines.push('Token balance changes (owner, mint, change):');
+    for (const d of n.deltas || []) lines.push(`  ${d.owner}${tag(d.owner)}  ${d.mint}  ${d.amount > 0 ? '+' : ''}${d.amount}`);
+    if (!(n.deltas || []).length) lines.push('  (none)');
+    if ((n.solOut || []).length) lines.push(`SOL paid out by: ${n.solOut.map(a => a + tag(a)).join(', ')}`);
+    lines.push('Verdict for your wallets:');
+    const anySigned = n.signers.some(a => mine.has(a));
+    const anySent = (n.deltas || []).some(d => mine.has(d.owner) && d.amount < 0) || (n.solOut || []).some(a => mine.has(a));
+    const anyIn = (n.deltas || []).some(d => mine.has(d.owner) && d.amount > 0);
+    lines.push(`  inbound to a listed wallet: ${anyIn}   a listed wallet signed: ${anySigned}   a listed wallet paid out: ${anySent}   DEX program seen: ${n.dex || 'none'}`);
+    lines.push(`  strict mode would ${anyIn && !anySigned && !anySent && !n.dex ? 'COUNT this as a reward' : 'EXCLUDE this'}.`);
+    lines.push('Log messages (first 40):');
+    for (const l of ((tx.meta && tx.meta.logMessages) || []).slice(0, 40)) lines.push('  ' + l);
+    out.textContent = lines.join('\n');
+  } catch (e) { out.textContent = 'Error: ' + e.message; }
+}
+$('inspectBtn').addEventListener('click', inspect);
 
 // ---------- wiring ----------
 $('provider').addEventListener('change', () => { onProviderChange(); saveSettings(); });

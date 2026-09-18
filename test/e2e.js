@@ -6,6 +6,8 @@ const ZEC = 'ZecMint111111111111111111111111111111111111';
 const KNOTS = 'KnotsMint1111111111111111111111111111111111';
 const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const JUP_LO = 'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X';
+const W2 = 'Wa11etTwo11111111111111111111111111111111111';
+const UNKNOWN_DEX = 'UnknownDexProgram111111111111111111111111111';
 const now = Math.floor(Date.now()/1000);
 // Solscan mock: 2 STONK payouts, 1 ZEC payout, 1 KNOTS buy (STONK out, KNOTS in) -> excluded
 const solscanRows = [
@@ -18,6 +20,9 @@ const solscanRows = [
 ];
 function tokBal(idx, mint, owner, amt, dec){ return { accountIndex: idx, mint, owner, uiTokenAmount:{ amount:String(amt), decimals:dec } }; }
 const rpcTxs = {
+  sigF: { blockTime: now-6000, meta:{ err:null, fee:5000, preBalances:[10,20,30,40,50], postBalances:[10-5000,20,30,40,50],
+      preTokenBalances:[tokBal(2,KNOTS,W2,300000000,6), tokBal(3,USDC,W,0,6), tokBal(4,USDC,'pool',1e9,6)], postTokenBalances:[tokBal(2,KNOTS,W2,0,6), tokBal(3,USDC,W,17000000,6), tokBal(4,USDC,'pool',1e9-17000000,6)] },
+    transaction:{ message:{ accountKeys:[{pubkey:W2,signer:true},{pubkey:UNKNOWN_DEX,signer:false},{pubkey:'w2Knots',signer:false},{pubkey:'myUsdc',signer:false},{pubkey:'poolAta',signer:false}], instructions:[{ programId: UNKNOWN_DEX }] } } },
   sigE: { blockTime: now-5000, meta:{ err:null, fee:5000, preBalances:[10,20,30,40,50], postBalances:[10-5000,20,30,40,50],
       preTokenBalances:[tokBal(2,KNOTS,'escrowPda',500000000,6), tokBal(3,USDC,W,0,6), tokBal(4,USDC,'pool',1e9,6)], postTokenBalances:[tokBal(2,KNOTS,'escrowPda',0,6), tokBal(3,USDC,W,42000000,6), tokBal(4,USDC,'pool',1e9-42000000,6)],
       innerInstructions:[{ index:0, instructions:[{ programId: JUP_LO, accounts:[] }] }] },
@@ -49,8 +54,8 @@ const rpcTxs = {
       const body = route.request().postDataJSON();
       const handle = (req) => {
         const { method, params } = req; let result;
-        if (method==='getTokenAccountsByOwner') result = { value: params[1].programId.startsWith('Tokenkeg') ? [ { pubkey:'myAta', account:{ data:{ parsed:{ info:{ mint:STONK, tokenAmount:{decimals:6} } } } } }, { pubkey:'myKnots', account:{ data:{ parsed:{ info:{ mint:KNOTS, tokenAmount:{decimals:6} } } } } }, { pubkey:'myUsdc', account:{ data:{ parsed:{ info:{ mint:USDC, tokenAmount:{decimals:6} } } } } } ] : [] };
-        else if (method==='getSignaturesForAddress') result = params[0]==='myAta' ? [ {signature:'sigA', blockTime:now-3600, err:null}, {signature:'sigD', blockTime:now-10000, err:null}, {signature:'sigOld', blockTime:now-40*86400, err:null} ] : params[0]==='myUsdc' ? [ {signature:'sigE', blockTime:now-5000, err:null} ] : [ {signature:'sigD', blockTime:now-10000, err:null} ];
+        if (method==='getTokenAccountsByOwner') result = { value: params[0]===W2 ? (params[1].programId.startsWith('Tokenkeg') ? [ { pubkey:'w2Knots', account:{ data:{ parsed:{ info:{ mint:KNOTS, tokenAmount:{decimals:6} } } } } } ] : []) : params[1].programId.startsWith('Tokenkeg') ? [ { pubkey:'myAta', account:{ data:{ parsed:{ info:{ mint:STONK, tokenAmount:{decimals:6} } } } } }, { pubkey:'myKnots', account:{ data:{ parsed:{ info:{ mint:KNOTS, tokenAmount:{decimals:6} } } } } }, { pubkey:'myUsdc', account:{ data:{ parsed:{ info:{ mint:USDC, tokenAmount:{decimals:6} } } } } } ] : [] };
+        else if (method==='getSignaturesForAddress') result = params[0]==='myAta' ? [ {signature:'sigA', blockTime:now-3600, err:null}, {signature:'sigD', blockTime:now-10000, err:null}, {signature:'sigOld', blockTime:now-40*86400, err:null} ] : params[0]==='myUsdc' ? [ {signature:'sigE', blockTime:now-5000, err:null}, {signature:'sigF', blockTime:now-6000, err:null} ] : params[0]==='w2Knots' ? [ {signature:'sigF', blockTime:now-6000, err:null} ] : [ {signature:'sigD', blockTime:now-10000, err:null} ];
         else if (method==='getTransaction') result = rpcTxs[params[0]] || null;
         else throw new Error('unexpected '+method);
         return { jsonrpc:'2.0', id:req.id, result };
@@ -72,13 +77,20 @@ const rpcTxs = {
   console.log('EST LINE:', await page.$eval('.card .inline .hint', e => e.innerText));
   // --- RPC provider ---
   await page.selectOption('#provider', 'rpc'); await page.fill('#rpcUrl', 'https://rpc.test/');
+  await page.fill('#addresses', W + ' main\n' + W2 + ' second');
   await page.click('#run'); await page.waitForFunction(() => document.getElementById('run').disabled===false);
   console.log('STATUS(rpc):', await page.textContent('#status'));
   console.log(await page.$eval('#summary', e => e.innerText));
   console.log('LOG:\n' + await page.textContent('#log'));
   const strictSummary = await page.$eval('#summary', e => e.innerText);
   if (strictSummary.includes('USDC')) { console.log('FAIL: USDC limit-order fill counted as reward in strict mode'); process.exit(1); }
-  console.log('OK: DEX-program fill excluded in strict mode');
+  console.log('OK: DEX-program fill and cross-wallet trade excluded in strict mode');
+  // inspector on the cross-wallet trade
+  await page.fill('#inspectSig', 'sigF'); await page.click('#inspectBtn');
+  await page.waitForFunction(() => /Verdict/.test(document.getElementById('inspectOut').textContent));
+  const insp = await page.textContent('#inspectOut');
+  if (!/a listed wallet signed: true/.test(insp) || !/EXCLUDE/.test(insp)) { console.log('FAIL inspector:\n' + insp); process.exit(1); }
+  console.log('OK: inspector verdict\n' + insp.split('\n').filter(l => /Verdict|strict mode|inbound/.test(l)).join('\n'));
   // loose mode should include the KNOTS buy
   await page.selectOption('#strict', 'loose'); await page.click('#run'); await page.waitForFunction(() => document.getElementById('run').disabled===false);
   console.log('LOOSE:', await page.$eval('#summary', e => e.innerText.split('\n').slice(0,6).join(' | ')));
